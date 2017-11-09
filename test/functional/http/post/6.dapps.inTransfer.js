@@ -7,6 +7,7 @@ var constants = require('../../../../helpers/constants');
 var sendTransactionPromise = require('../../../common/apiHelpers').sendTransactionPromise;
 var creditAccountPromise = require('../../../common/apiHelpers').creditAccountPromise;
 var waitForConfirmations = require('../../../common/apiHelpers').waitForConfirmations;
+var getAccountsPromise = require('../../../common/apiHelpers').getAccountsPromise;
 
 describe('POST /api/transactions (type 6) inTransfer dapp', function () {
 
@@ -14,11 +15,8 @@ describe('POST /api/transactions (type 6) inTransfer dapp', function () {
 	var transactionsToWaitFor = [];
 	var badTransactions = [];
 	var goodTransactions = [];
-	var badTransactionsEnforcement = [];
-	var goodTransactionsEnforcement = [];
 
 	var account = node.randomAccount();
-	var accountNoFunds = node.randomAccount();
 	var accountMinimalFunds = node.randomAccount();
 
 	// Crediting accounts
@@ -47,6 +45,17 @@ describe('POST /api/transactions (type 6) inTransfer dapp', function () {
 				node.expect(res).to.have.property('success').to.ok;
 				node.expect(res).to.have.property('transactionId').to.equal(transaction.id);
 				node.guestbookDapp.id = res.transactionId;
+				transactionsToWaitFor.push(res.transactionId);
+			})
+			.then(function () {
+				transaction = node.lisk.dapp.createDapp(accountMinimalFunds.password, null, node.blockDataDapp);
+
+				return sendTransactionPromise(transaction);
+			})
+			.then(function (res) {
+				node.expect(res).to.have.property('success').to.ok;
+				node.expect(res).to.have.property('transactionId').to.equal(transaction.id);
+				node.blockDataDapp.id = res.transactionId;
 				transactionsToWaitFor.push(res.transactionId);
 			})
 			.then(function () {
@@ -115,8 +124,97 @@ describe('POST /api/transactions (type 6) inTransfer dapp', function () {
 				});
 			});
 
-			it('with correct data should be ok', function () {
-				transaction = node.lisk.transfer.createInTransfer(node.guestbookDapp.id, 1, node.gAccount.password);
+			it('invalid dapp id should fail', function () {
+				var invalidDappId = '1L';
+				transaction = node.lisk.transfer.createInTransfer(invalidDappId, 1, node.gAccount.password);
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.not.ok;
+					node.expect(res).to.have.property('message').to.equal('Invalid transaction body - Failed to validate inTransfer schema: Object didn\'t pass validation for format id: ' + invalidDappId);
+					badTransactions.push(transaction);
+				});
+			});
+		});
+
+		describe('amount', function () {
+
+			it('using < 0 should fail', function () {
+				transaction = node.lisk.transfer.createInTransfer(node.guestbookDapp.id, -1, node.gAccount.password);
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.not.ok;
+					node.expect(res).to.have.property('message').to.equal('Invalid transaction body - Failed to validate transaction schema: Value -1 is less than minimum 0');
+					badTransactions.push(transaction);
+				});
+			});
+
+			it('using > balance should fail', function () {				
+				return getAccountsPromise('address=' + account.address)
+					.then(function (res) {
+						node.expect(res.body).to.have.nested.property('accounts').to.have.lengthOf(1);
+						
+						var balance = res.body.accounts[0].balance;
+						var amount = new node.bignum(balance).plus('1').toNumber();
+						transaction = node.lisk.transfer.createInTransfer(node.guestbookDapp.id, amount, account.password);
+
+						return sendTransactionPromise(transaction);
+					})
+					.then(function (res) {
+						node.expect(res).to.have.property('success').to.be.not.ok;
+						node.expect(res).to.have.property('message').to.match(/^Account does not have enough LSK: /);
+						badTransactions.push(transaction);
+					});
+			});
+		});
+	});
+
+	describe('transactions processing', function () {
+
+		it('invented dapp id should fail', function () {
+			var inventedDappId  = '1';
+			transaction = node.lisk.transfer.createInTransfer(inventedDappId, 1, node.gAccount.password);
+
+			return sendTransactionPromise(transaction).then(function (res) {
+				node.expect(res).to.have.property('success').to.be.not.ok;
+				node.expect(res).to.have.property('message').to.equal('Application not found: ' + inventedDappId);
+				badTransactions.push(transaction);
+			});
+		});
+
+		it('using unrelated transaction id as dapp id should fail', function () {
+			transaction = node.lisk.transfer.createInTransfer(transactionsToWaitFor[0], 1, node.gAccount.password);
+
+			return sendTransactionPromise(transaction).then(function (res) {
+				node.expect(res).to.have.property('success').to.be.not.ok;
+				node.expect(res).to.have.property('message').to.equal('Application not found: ' + transactionsToWaitFor[0]);
+				badTransactions.push(transaction);
+			});
+		});
+
+		it('with correct data should be ok', function () {
+			transaction = node.lisk.transfer.createInTransfer(node.guestbookDapp.id, 10 * node.normalizer, node.gAccount.password);
+
+			return sendTransactionPromise(transaction).then(function (res) {
+				node.expect(res).to.have.property('success').to.be.ok;
+				node.expect(res).to.have.property('transactionId').to.equal(transaction.id);
+				goodTransactions.push(transaction);
+			});
+		});
+
+		describe('from the author itself', function (){
+
+			it('with minimal funds should fail', function () {
+				transaction = node.lisk.transfer.createInTransfer(node.blockDataDapp.id, 1, accountMinimalFunds.password);
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.not.ok;
+					node.expect(res).to.have.property('message').to.match(/^Account does not have enough LSK: /);
+					badTransactions.push(transaction);
+				});
+			});
+
+			it('with enough funds should be ok', function () {
+				transaction = node.lisk.transfer.createInTransfer(node.guestbookDapp.id, 10 * node.normalizer, account.password);
 
 				return sendTransactionPromise(transaction).then(function (res) {
 					node.expect(res).to.have.property('success').to.be.ok;
@@ -127,22 +225,8 @@ describe('POST /api/transactions (type 6) inTransfer dapp', function () {
 		});
 	});
 
-	describe('transactions processing', function () {
-	});
-
-	describe('unconfirmed state', function () {
-	});
-
 	describe('confirmation', function () {
 
 		shared.confirmationPhase(goodTransactions, badTransactions);
-	});
-
-	describe('validation', function () {
-	});
-
-	describe('confirm validation', function () {
-
-		shared.confirmationPhase(goodTransactionsEnforcement, badTransactionsEnforcement);
 	});
 });
