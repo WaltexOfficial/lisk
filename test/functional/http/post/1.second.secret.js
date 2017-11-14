@@ -396,6 +396,55 @@ describe('POST /api/transactions (type 1) register second secret', function () {
 				});
 			});
 		});
+
+		describe('type 6 - inTransfer', function () {
+
+			var dapp6 = node.randomApplication();
+			
+			before(function () {
+				transaction = node.lisk.dapp.createDapp(account.password, account.secondPassword, dapp6);
+
+				return sendTransactionPromise(transaction)
+					.then(function (res) {
+						node.expect(res).to.have.property('success').to.be.ok;
+						node.expect(res).to.have.property('transactionId').to.equal(transaction.id);
+						goodTransactionsEnforcement.push(transaction);
+						dapp6.transactionId = transaction.id;
+
+						return waitForConfirmations([dapp6.transactionId]);
+					});
+			});
+
+			it('using no second passphrase on an account with second passphrase enabled should fail', function () {
+				transaction = node.lisk.transfer.createInTransfer(dapp6.transactionId, 10 * node.normalizer, account.password);
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.not.ok;
+					node.expect(res).to.have.property('message').to.equal('Missing sender second signature');
+					badTransactionsEnforcement.push(transaction);
+				});
+			});
+
+			it('using second passphrase not matching registered secondPublicKey should fail', function () {
+				transaction = node.lisk.transfer.createInTransfer(dapp6.transactionId, 10 * node.normalizer, account.password, 'wrong second password');
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.not.ok;
+					node.expect(res).to.have.property('message').to.equal('Failed to verify second signature');
+					badTransactionsEnforcement.push(transaction);
+				});
+			});
+
+			it('using correct second passphrase should be ok', function () {
+				transaction = node.lisk.transfer.createInTransfer(dapp6.transactionId, 10 * node.normalizer, account.password, account.secondPassword);
+
+				return sendTransactionPromise(transaction).then(function (res) {
+					node.expect(res).to.have.property('success').to.be.ok;
+					node.expect(res).to.have.property('transactionId').to.equal(transaction.id);
+					goodTransactionsEnforcement.push(transaction);
+				});
+			});
+		});
 	});
 
 	describe('confirm validation', function () {
